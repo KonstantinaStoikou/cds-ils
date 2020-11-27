@@ -33,6 +33,7 @@ from invenio_base.app import create_cli
 from invenio_circulation.pidstore.pids import CIRCULATION_LOAN_PID_TYPE
 from invenio_circulation.proxies import current_circulation
 from invenio_db import db
+from invenio_oauthclient.models import RemoteAccount
 from invenio_pages import Page
 from invenio_pidstore.models import PersistentIdentifier, PIDStatus
 from invenio_pidstore.providers.recordid_v2 import RecordIdProviderV2
@@ -158,6 +159,27 @@ def create_userprofile_for(email, username, full_name):
         db.session.commit()
 
 
+def create_userprofile_for_with_remote(email, username, full_name):
+    """Create a fake user profile."""
+    user = User.query.filter_by(email=email).one_or_none()
+    if user:
+        profile = UserProfile(user_id=int(user.get_id()))
+        profile.username = username
+        profile.full_name = full_name
+
+        remote_account = RemoteAccount(
+            client_id=current_app.config["CERN_APP_OPENID_CREDENTIALS"][
+                "consumer_key"
+            ],
+            user_id=user.get_id(),
+            extra_data=dict(person_id=1234),
+        )
+        db.session.add(profile)
+        db.session.add(remote_account)
+
+        db.session.commit()
+
+
 @fixtures.command()
 @with_appcontext
 def demo_patrons():
@@ -177,7 +199,9 @@ def demo_patrons():
 
     # Create users
     run_command("users create patron1@test.ch -a --password=123456")  # ID 1
-    create_userprofile_for("patron1@test.ch", "patron1", "Yannic Vilma")
+    create_userprofile_for_with_remote(
+        "patron1@test.ch", "patron1", "Yannic Vilma"
+    )
     run_command("users create patron2@test.ch -a --password=123456")  # ID 2
     create_userprofile_for("patron2@test.ch", "patron2", "Diana Adi")
     run_command("users create admin@test.ch -a --password=123456")  # ID 3
@@ -356,8 +380,7 @@ def create_loan(user_email, is_past_loan):
 
     if total > 0 and not is_past_loan:
         click.secho(
-            "Item for ongoing loan is already loaned by patron with email {0}."
-            .format(
+            "Item for ongoing loan is already loaned by patron with email {0}.".format(
                 active_loan[0].patron.email
             ),
             fg="red",
@@ -385,9 +408,7 @@ def create_loan(user_email, is_past_loan):
     if is_past_loan:
         loan_dict["state"] = "ITEM_RETURNED"
         loan_dict["document_pid"] = past_loan_doc_pid
-        transaction_date = start_date = arrow.utcnow() - timedelta(
-            days=365
-        )
+        transaction_date = start_date = arrow.utcnow() - timedelta(days=365)
         end_date = start_date + timedelta(weeks=4)
         item_pid = past_loan_item_pid
     else:
@@ -490,8 +511,7 @@ def clean_loans(user_email, given_date):
     current_search.flush_and_refresh(index="*")
 
     click.secho(
-        "Loans and document requests of user with pid '{0}' have been deleted."
-        .format(
+        "Loans and document requests of user with pid '{0}' have been deleted.".format(
             patron_pid
         ),
         fg="blue",
